@@ -3,6 +3,9 @@ import * as pfs from "./promise-fs";
 import * as cp from "child_process";
 import * as _ from "underscore";
 import * as vscode from "vscode";
+import * as fs from "fs"
+import * as xml2js from "xml2js"
+import { error } from "util";
 
 /**
  * Gets the ROS config section.
@@ -58,9 +61,51 @@ export function getPackages(): Promise<{ [name: string]: string }> {
  * Gets include dirs using `catkin_find`.
  */
 export function getIncludeDirs(): Promise<string[]> {
-  return new Promise((c, e) => cp.exec("catkin_find --include", { env: extension.env }, (err, out) =>
-    err ? e(err) : c(out.trim().split("\n"))
-  ));
+  return new Promise((resolve, reject) => {
+    var parser = new xml2js.Parser();
+    var projectFilePath = extension.baseDir + "/build/Project.cbp";
+    fs.readFile(projectFilePath, function (err, data) {
+      if (err){
+        reject(new Error('Please build the workspace first.'));
+        return;
+      }
+      parser.parseString(data, function (err, result) {
+        if (!err) {
+          var includes : string[] = [];
+          var targets = result.CodeBlocks_project_file.Project[0].Build[0].Target
+          for(let target of targets){
+            // Get target type
+            var targetType : string = '0';
+            for (let option of target.Option){
+              if(option.$.hasOwnProperty('type')){
+                targetType = option.$.type;
+              }
+            }
+            // Exclude non package type targets, e.g. tests
+            if(targetType != '1'){
+              // Not a package target -> skip
+              continue;
+            }
+            if(!target.hasOwnProperty('Compiler')){
+              // Not a package target -> skip
+              continue;
+            }
+            var targetIncludes = target.Compiler[0].Add;
+            for(let include of targetIncludes){
+              if (include.$.hasOwnProperty('directory')){
+                if(includes.indexOf(include.$.directory) == -1){
+                  includes.push(include.$.directory);
+                }
+              }
+            }              
+          }
+          resolve(includes);
+        } else {
+          reject(err);
+        }
+      });
+    });
+  });
 }
 
 /**
